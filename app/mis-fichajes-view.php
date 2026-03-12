@@ -1,8 +1,8 @@
 <?php
-// Inicializar la aplicación: arrancar la sesión PHP, resolver el subdominio y cargar la configuración global.
+// Initialize app (session, subdomain routing, etc.)
 require_once __DIR__ . '/../shared/utils/app_init.php';
 
-// Incluir los modelos, componentes y utilidades necesarios para esta vista.
+// Incluir archivos necesarios
 require_once __DIR__ . '/../shared/models/Trabajador.php';
 require_once __DIR__ . '/../shared/models/Fichajes.php';
 require_once __DIR__ . '/../shared/components/MenuHelper.php';
@@ -11,119 +11,93 @@ require_once __DIR__ . '/../shared/layouts/BaseLayout.php';
 require_once __DIR__ . '/../shared/components/Breadcrumb.php';
 require_once __DIR__ . '/../assets/css/components.php';
 
-// Verificar que el usuario dispone de una sesión autenticada válida; de lo contrario, redirigir al login.
+// Verificar autenticación
 if (!Trabajador::estaLogueado()) {
     header('Location: /app/login.php');
     exit;
 }
 
-// Verificar que el rol del usuario autoriza el acceso: solo administradores y supervisores pueden continuar.
+// Verificar que el usuario sea empleado (solo empleados pueden usar esta vista)
 $rol_trabajador = $_SESSION['rol_trabajador'] ?? 'Empleado';
-if (!in_array(strtolower($rol_trabajador), ['administrador', 'supervisor'])) {
+if (strtolower($rol_trabajador) !== 'empleado') {
     header('Location: /app/dashboard.php');
     exit;
 }
 
-// Recuperar los datos identificativos del usuario autenticado desde la superglobal $_SESSION.
+// Verificar permisos de ver fichajes
+$config_empresa = Trabajador::obtenerConfiguracionEmpresa();
+if (empty($config_empresa['empleados_ver_fichajes'])) {
+    header('Location: /app/dashboard.php');
+    exit;
+}
+
+// Verificar permisos de ver detalles de fichajes
+if (empty($config_empresa['empleados_detalles_fichajes'])) {
+    header('Location: mis-fichajes.php?error=detalles_no_permitidos');
+    exit;
+}
+
+// Obtener datos del trabajador de la sesión
 $nombre_trabajador = $_SESSION['nombre_trabajador'] ?? 'Trabajador';
 $correo_trabajador = $_SESSION['correo_trabajador'] ?? 'N/A';
 $trabajador_id = $_SESSION['id_trabajador'] ?? null;
-$empresa_id = $_SESSION['empresa_id'] ?? null;
 
-// Obtener la configuración de la empresa (colores, logo, nombre de app, etc.) desde la sesión.
-$config_empresa = Trabajador::obtenerConfiguracionEmpresa();
+if (!$trabajador_id) {
+    header('Location: /app/login.php');
+    exit;
+}
 
-// Verificar que el parámetro de identificador del fichaje esté presente en la query string (GET).
+// Verificar que se proporcione el ID del fichaje
 $fichaje_id = $_GET['id'] ?? null;
 if (!$fichaje_id || !is_numeric($fichaje_id)) {
-    header('Location: fichajes.php?error=invalid_id');
+    header('Location: mis-fichajes.php?error=invalid_id');
     exit;
 }
 
-// Instanciar el modelo Fichajes para consultar los detalles del registro.
+// Inicializar clase Fichajes
 $fichajes = new Fichajes();
 
-// Obtener los datos completos del fichaje desde la base de datos por su identificador.
-$fichaje_detalle = $fichajes->obtenerDetalleFichaje($fichaje_id, $empresa_id);
+// Obtener detalles del fichaje (con validación automática de propiedad)
+$fichaje_detalle = $fichajes->obtenerDetalleFichajeParaEmpleado($fichaje_id, $trabajador_id);
 if (!$fichaje_detalle) {
-    header('Location: fichajes.php?error=not_found');
+    header('Location: mis-fichajes.php?error=not_found');
     exit;
 }
 
-// Obtener el historial de auditoría (log de cambios) asociado al fichaje.
-$historial_cambios = $fichajes->obtenerHistorialFichaje($fichaje_id);
-
-// Preparar el array de datos del usuario que se pasará al layout base para la cabecera de navegación.
+// Preparar datos de usuario para el layout
 $user_data = [
     'nombre' => $nombre_trabajador,
     'correo' => $correo_trabajador,
     'rol' => $rol_trabajador
 ];
 
-// Construir la URL de retorno al listado, restaurando los filtros previamente guardados en sesión.
-$back_url = 'fichajes.php';
-if (isset($_SESSION['fichajes_filtros'])) {
-    $filtros_guardados = $_SESSION['fichajes_filtros'];
-    $query_params = [];
-
-    foreach ($filtros_guardados as $key => $value) {
-        if ($key === 'trabajadores' && is_array($value) && !empty($value)) {
-            foreach ($value as $trabajador_id) {
-                $query_params[] = 'trabajadores[]=' . urlencode($trabajador_id);
-            }
-        } elseif (!empty($value) && $key !== 'trabajadores') {
-            $query_params[] = $key . '=' . urlencode($value);
-        }
-    }
-
-    if (!empty($query_params)) {
-        $back_url .= '?' . implode('&', $query_params);
-    }
-}
-
-// Función encapsuladora que genera el HTML del contenido principal usando output buffering.
-function renderFichajeViewContent($fichaje_detalle, $historial_cambios, $rol_trabajador, $fichaje_id, $back_url = 'fichajes.php') {
+// Función para renderizar el contenido
+function renderMisFichajesViewContent($fichaje_detalle) {
     ob_start();
     ?>
     
     <!-- Breadcrumb -->
-    <?php
+    <?php 
     Breadcrumb::render([
         ['label' => 'Inicio', 'url' => '/app/dashboard.php', 'icon' => 'fas fa-home'],
-        ['label' => 'Fichajes', 'url' => '/app/' . $back_url],
+        ['label' => 'Mis Fichajes', 'url' => '/app/mis-fichajes.php'],
         ['label' => 'Detalle de Sesión']
-    ]);
+    ]); 
     ?>
-
-    <!-- Success Message -->
-    <?php if (isset($_GET['success']) && $_GET['success'] === 'updated'): ?>
-        <div class="mb-6 p-4 <?php echo CSSComponents::getCardClasses('success'); ?>">
-            <div class="flex items-center">
-                <i class="fas fa-check-circle text-green-500 mr-3"></i>
-                <span class="text-green-700">Fichaje actualizado correctamente</span>
-            </div>
-        </div>
-    <?php endif; ?>
 
     <!-- Page Header -->
     <div class="mb-6">
         <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between">
             <div>
-                <h1 class="text-2xl font-bold text-gray-900">Detalle de Sesión de Trabajo</h1>
+                <h1 class="text-2xl font-bold text-gray-900">Detalle de mi Sesión de Trabajo</h1>
                 <p class="text-gray-600 mt-1">
-                    Información completa de la sesión de <?php echo htmlspecialchars($fichaje_detalle['nombre_completo']); ?>
+                    Información de tu sesión del <?php echo htmlspecialchars($fichaje_detalle['fecha_inicio_formateada']); ?>
                 </p>
             </div>
-            <div class="mt-4 sm:mt-0 flex gap-3">
-                <?php if (in_array(strtolower($rol_trabajador), ['administrador', 'supervisor'])): ?>
-                    <a href="fichaje-edit.php?id=<?php echo $fichaje_id; ?>" class="<?php echo CSSComponents::getButtonClasses('primary', 'md'); ?>">
-                        <i class="fas fa-edit mr-2"></i>
-                        Editar Fichaje
-                    </a>
-                <?php endif; ?>
-                <a href="<?php echo htmlspecialchars($back_url); ?>" class="<?php echo CSSComponents::getButtonClasses('outline', 'md'); ?>">
+            <div class="mt-4 sm:mt-0">
+                <a href="mis-fichajes.php" class="<?php echo CSSComponents::getButtonClasses('outline', 'md'); ?>">
                     <i class="fas fa-arrow-left mr-2"></i>
-                    Volver a Fichajes
+                    Volver a Mis Fichajes
                 </a>
             </div>
         </div>
@@ -224,7 +198,7 @@ function renderFichajeViewContent($fichaje_detalle, $historial_cambios, $rol_tra
     <div class="<?php echo CSSComponents::getCardClasses('default'); ?> p-4 mb-6">
         <h3 class="text-lg font-medium text-gray-900 mb-4 flex items-center">
             <i class="fas fa-map-marker-alt text-red-500 mr-2"></i>
-            Ubicaciones GPS
+            Ubicación del fichaje
         </h3>
         
         <div id="map" style="height: 400px; position: relative; z-index: 1;" class="rounded-lg border border-gray-300 mb-4"></div>
@@ -245,116 +219,6 @@ function renderFichajeViewContent($fichaje_detalle, $historial_cambios, $rol_tra
                 </div>
                 <?php endif; ?>
             </div>
-        </div>
-    </div>
-    <?php endif; ?>
-
-    <!-- Observaciones -->
-    <?php if ($fichaje_detalle['observaciones']): ?>
-    <div class="<?php echo CSSComponents::getCardClasses('default'); ?> p-6 mb-6">
-        <h3 class="text-lg font-medium text-gray-900 mb-4 flex items-center">
-            <i class="fas fa-sticky-note text-yellow-500 mr-2"></i>
-            Observaciones
-        </h3>
-        <div class="text-sm text-gray-700 whitespace-pre-wrap bg-gray-50 p-4 rounded-lg">
-            <?php echo htmlspecialchars($fichaje_detalle['observaciones']); ?>
-        </div>
-    </div>
-    <?php endif; ?>
-
-    <!-- Historial de Registros -->
-    <?php if (!empty($historial_cambios)): ?>
-    <div class="<?php echo CSSComponents::getCardClasses('default'); ?> p-6">
-        <h3 class="text-lg font-medium text-gray-900 mb-4 flex items-center">
-            <i class="fas fa-history text-purple-500 mr-2"></i>
-            Historial de Registros
-        </h3>
-        
-        <div class="overflow-x-auto">
-            <table class="<?php echo CSSComponents::getTableClasses(); ?>">
-                <thead>
-                    <tr class="<?php echo CSSComponents::getTableHeaderClasses(); ?>">
-                        <th class="<?php echo CSSComponents::getTableCellClasses(); ?> text-left">Inicio</th>
-                        <th class="<?php echo CSSComponents::getTableCellClasses(); ?> text-left">Fin</th>
-                        <th class="<?php echo CSSComponents::getTableCellClasses(); ?> text-left">Fecha</th>
-                        <th class="<?php echo CSSComponents::getTableCellClasses(); ?> text-left">Descripción</th>
-                        <th class="<?php echo CSSComponents::getTableCellClasses(); ?> text-left">IP</th>
-                        <th class="<?php echo CSSComponents::getTableCellClasses(); ?> text-left">Navegador</th>
-                        <th class="<?php echo CSSComponents::getTableCellClasses(); ?> text-left">Tipo</th>
-                        <th class="<?php echo CSSComponents::getTableCellClasses(); ?> text-left">Usuario</th>
-                        <th class="<?php echo CSSComponents::getTableCellClasses(); ?> text-center">Localización</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    <?php foreach ($historial_cambios as $cambio): ?>
-                    <tr class="border-b border-gray-200 hover:bg-gray-50">
-                        <td class="<?php echo CSSComponents::getTableCellClasses(); ?> text-sm">
-                            <?php echo $cambio['hora_inicio'] ? date('H:i:s', strtotime($cambio['hora_inicio'])) : '-'; ?>
-                        </td>
-                        <td class="<?php echo CSSComponents::getTableCellClasses(); ?> text-sm">
-                            <?php echo $cambio['hora_fin'] ? date('H:i:s', strtotime($cambio['hora_fin'])) : '-'; ?>
-                        </td>
-                        <td class="<?php echo CSSComponents::getTableCellClasses(); ?> text-sm">
-                            <?php echo date('d/m/Y H:i', strtotime($cambio['fecha_hora_cambio'])); ?>
-                        </td>
-                        <td class="<?php echo CSSComponents::getTableCellClasses(); ?> text-sm">
-                            <?php echo htmlspecialchars($cambio['descripcion']); ?>
-                        </td>
-                        <td class="<?php echo CSSComponents::getTableCellClasses(); ?> text-sm font-mono">
-                            <?php echo htmlspecialchars($cambio['ip_address'] ?? '-'); ?>
-                        </td>
-                        <td class="<?php echo CSSComponents::getTableCellClasses(); ?> text-sm">
-                            <?php 
-                            $userAgent = $cambio['user_agent'] ?? '';
-                            if (strlen($userAgent) > 40) {
-                                // Extraer el nombre del navegador principal a partir del User-Agent para mostrar en la vista de detalle.
-                                $browser = 'Desconocido';
-                                if (strpos($userAgent, 'Chrome') !== false) $browser = 'Chrome';
-                                elseif (strpos($userAgent, 'Firefox') !== false) $browser = 'Firefox';
-                                elseif (strpos($userAgent, 'Safari') !== false) $browser = 'Safari';
-                                elseif (strpos($userAgent, 'Edge') !== false) $browser = 'Edge';
-                                elseif (strpos($userAgent, 'Opera') !== false) $browser = 'Opera';
-                                
-                                echo '<span title="' . htmlspecialchars($userAgent) . '" class="cursor-help">' . 
-                                     htmlspecialchars($browser) . '</span>';
-                            } else {
-                                echo htmlspecialchars($userAgent ?: '-');
-                            }
-                            ?>
-                        </td>
-                        <td class="<?php echo CSSComponents::getTableCellClasses(); ?> text-sm">
-                            <span class="<?php 
-                                $tipo = $cambio['tipo_cambio'];
-                                switch($tipo) {
-                                    case 'iniciada': echo CSSComponents::getBadgeClasses('success', 'xs'); break;
-                                    case 'finalizada': echo CSSComponents::getBadgeClasses('info', 'xs'); break;
-                                    case 'cancelada': echo CSSComponents::getBadgeClasses('error', 'xs'); break;
-                                    case 'modificada': echo CSSComponents::getBadgeClasses('warning', 'xs'); break;
-                                    default: echo CSSComponents::getBadgeClasses('default', 'xs'); break;
-                                }
-                            ?>">
-                                <?php echo ucfirst($cambio['tipo_cambio']); ?>
-                            </span>
-                        </td>
-                        <td class="<?php echo CSSComponents::getTableCellClasses(); ?> text-sm">
-                            <?php echo htmlspecialchars($cambio['nombre_completo']); ?>
-                        </td>
-                        <td class="<?php echo CSSComponents::getTableCellClasses(); ?> text-center">
-                            <?php if ($cambio['tiene_coordenadas']): ?>
-                                <a href="https://maps.google.com/?q=<?php echo $cambio['latitud']; ?>,<?php echo $cambio['longitud']; ?>" 
-                                   target="_blank" 
-                                   class="text-blue-600 hover:text-blue-800" 
-                                   title="Ver en Google Maps">
-                                    <i class="fas fa-map-marker-alt"></i>
-                                </a>
-                            <?php else: ?>
-                                <span class="text-gray-400">-</span>
-                            <?php endif; ?>
-                        </td>
-                    </tr>
-                    <?php endforeach; ?>
-                </tbody>
-            </table>
         </div>
     </div>
     <?php endif; ?>
@@ -498,7 +362,7 @@ function renderFichajeViewContent($fichaje_detalle, $historial_cambios, $rol_tra
     return ob_get_clean();
 }
 
-// Capturar el HTML generado mediante output buffering e invocar el layout base para enviar la respuesta al cliente.
-$content = renderFichajeViewContent($fichaje_detalle, $historial_cambios, $rol_trabajador, $fichaje_id, $back_url);
-BaseLayout::render('Detalle de Sesión', $content, $config_empresa, $user_data);
+// Renderizar la página
+$content = renderMisFichajesViewContent($fichaje_detalle);
+BaseLayout::render('Detalle de mi Sesión', $content, $config_empresa, $user_data);
 ?> 
