@@ -20,7 +20,12 @@ if (!Trabajador::estaLogueado()) {
     exit;
 }
 
-
+// Verificar que el usuario tenga permisos (solo administradores y supervisores)
+$rol_trabajador = $_SESSION['rol_trabajador'] ?? 'Empleado';
+if (!in_array(strtolower($rol_trabajador), ['administrador', 'supervisor'])) {
+    header('Location: /app/dashboard.php');
+    exit;
+}
 
 // Obtener datos del trabajador de la sesión
 $nombre_trabajador = $_SESSION['nombre_trabajador'] ?? 'Trabajador';
